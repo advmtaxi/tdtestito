@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VidFast Stream Resolver</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.20/dist/hls.min.js"></script>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
+    html, body { height: 100%; margin: 0; overflow: hidden; }
+    body {
+      background: #090b0f;
+      color: #e8eef5;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      height: 100dvh;
+    }
+    header {
+      padding: 8px 12px;
+      border-bottom: 1px solid #1d2630;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    input, button, select {
+      background: #121820;
+      color: inherit;
+      border: 1px solid #273241;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 13px;
+    }
+    button { cursor: pointer; }
+    button:disabled { opacity: .5; }
+    .hint {
+      color: #8aa0b5;
+      font-size: 12px;
+      padding: 4px 12px;
+      margin: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    main {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: minmax(0, 1fr) minmax(0, 28%);
+      gap: 8px;
+      padding: 8px 12px 12px;
+      min-height: 0;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      background: #000;
+      border-radius: 10px;
+      grid-column: 1 / -1;
+      object-fit: contain;
+    }
+    pre {
+      background: #10151c;
+      border: 1px solid #1d2630;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 10px;
+      line-height: 1.35;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 0;
+      min-height: 0;
+    }
+    @media (max-width: 900px) {
+      main {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(0, 1fr) minmax(0, 18%) minmax(0, 18%);
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>VidFast Stream Resolver</strong>
+    <select id="type">
+      <option value="movie">Movie</option>
+      <option value="tv">TV</option>
+    </select>
+    <input id="contentId" value="1265609" size="10" placeholder="TMDB id">
+    <input id="season" value="1" size="3" placeholder="S" hidden>
+    <input id="episode" value="1" size="3" placeholder="E" hidden>
+    <select id="server"></select>
+    <button id="run">Decode &amp; play</button>
+  </header>
+  <p class="hint">Decode once — dropdown lists only mirrors that work for this title.</p>
+  <main>
+    <video id="video" controls playsinline crossorigin="anonymous"></video>
+    <pre id="status">Ready.</pre>
+    <pre id="debug"></pre>
+  </main>
+  <script>
+    const video = document.getElementById('video')
+    const status = document.getElementById('status')
+    const debug = document.getElementById('debug')
+    const btn = document.getElementById('run')
+    const typeSelect = document.getElementById('type')
+    const contentId = document.getElementById('contentId')
+    const seasonInput = document.getElementById('season')
+    const episodeInput = document.getElementById('episode')
+    const serverSelect = document.getElementById('server')
+    let hls
+    let session = null
+
+    const presets = {
+      movie: { id: '1265609' },
+      tv: { id: '95396', season: '1', episode: '1' },
+    }
+
+    function syncTypeFields() {
+      const isTv = typeSelect.value === 'tv'
+      seasonInput.hidden = !isTv
+      episodeInput.hidden = !isTv
+      const preset = presets[typeSelect.value]
+      contentId.value = preset.id
+      if (isTv) {
+        seasonInput.value = preset.season
+        episodeInput.value = preset.episode
+      }
+    }
+
+    typeSelect.onchange = () => {
+      session = null
+      syncTypeFields()
+    }
+
+    function fillServers(servers, selectedIndex) {
+      const keep = serverSelect.value
+      serverSelect.innerHTML = ''
+      servers.forEach((s, i) => {
+        const opt = document.createElement('option')
+        opt.value = String(i)
+        opt.textContent = s.description ? `${s.name} — ${s.description}` : s.name
+        serverSelect.appendChild(opt)
+      })
+      const index = keep && servers[keep] ? keep : String(selectedIndex ?? 0)
+      serverSelect.value = index
+    }
+
+    function stopPlayback() {
+      if (hls) { hls.destroy(); hls = null }
+      video.removeAttribute('src')
+      video.load()
+    }
+
+    function play(url) {
+      if (hls) { hls.destroy(); hls = null }
+      if (url.includes('.m3u8') && window.Hls && Hls.isSupported()) {
+        hls = new Hls({ enableWorker: true })
+        hls.on(Hls.Events.ERROR, (_, data) => {
+          if (data.fatal) status.textContent = `HLS ${data.type}: ${data.details}`
+        })
+        hls.loadSource(url)
+        hls.attachMedia(video)
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          video.play().catch((e) => { status.textContent = String(e) })
+        })
+        return
+      }
+      video.src = url
+      video.play().catch((e) => { status.textContent = String(e) })
+    }
+
+    async function fullDecode() {
+      const id = contentId.value.trim()
+      const type = typeSelect.value
+      btn.disabled = true
+      serverSelect.disabled = true
+      status.textContent = 'Finding available servers…'
+      try {
+        const qs = new URLSearchParams({ id, type })
+        if (type === 'tv') {
+          qs.set('season', seasonInput.value.trim())
+          qs.set('episode', episodeInput.value.trim())
+        }
+        const res = await fetch(`/api/stream?${qs}`)
+        const data = await res.json()
+        debug.textContent = JSON.stringify(data, null, 2)
+        if (!data.ok) {
+          stopPlayback()
+          session = null
+          status.textContent = `Failed at ${data.stage || 'unknown'}: ${data.error || 'unknown'}`
+          if (data.servers?.length) fillServers(data.servers, serverSelect.value)
+          return
+        }
+        session = {
+          contentPath: data.contentPath,
+          type: data.type,
+          servers: data.servers,
+          activeIndex: data.selectedServer?.index ?? 0,
+          playbackUrl: data.playbackUrl,
+        }
+        if (data.servers?.length) fillServers(data.servers, session.activeIndex)
+        status.textContent = `Playing ${data.selectedServer?.name || 'stream'} (${data.servers?.length || 0} mirrors)`
+        play(data.playbackUrl || data.streamUrl)
+      } catch (e) {
+        stopPlayback()
+        session = null
+        status.textContent = String(e.message || e)
+        debug.textContent = String(e.stack || e)
+      } finally {
+        btn.disabled = false
+        serverSelect.disabled = false
+      }
+    }
+
+    async function switchServer(index) {
+      if (!session?.servers?.[index]?.data) return
+      const server = session.servers[index]
+      const prevIndex = session.activeIndex
+      btn.disabled = true
+      serverSelect.disabled = true
+      status.textContent = `Switching to ${server.name}…`
+      try {
+        const res = await fetch('/api/server', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contentPath: session.contentPath,
+            type: session.type,
+            data: server.data,
+            serverName: server.name,
+            serverIndex: index,
+          }),
+        })
+        const data = await res.json()
+        debug.textContent = JSON.stringify({ ...data, servers: session.servers }, null, 2)
+        if (!data.ok) {
+          serverSelect.value = String(prevIndex)
+          status.textContent = `${server.name} failed — kept previous server`
+          return
+        }
+        session.activeIndex = index
+        session.playbackUrl = data.playbackUrl
+        status.textContent = `Playing ${server.name} (${session.contentPath})`
+        play(data.playbackUrl || data.streamUrl)
+      } catch (e) {
+        serverSelect.value = String(prevIndex)
+        status.textContent = `${server.name} failed — kept previous server`
+      } finally {
+        btn.disabled = false
+        serverSelect.disabled = false
+      }
+    }
+
+    btn.onclick = () => {
+      debug.textContent = ''
+      fullDecode()
+    }
+
+    serverSelect.onchange = () => {
+      if (!session) return
+      const index = Number(serverSelect.value)
+      if (index === session.activeIndex) return
+      switchServer(index)
+    }
+  </script>
+</body>
+</html>

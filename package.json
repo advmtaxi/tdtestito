@@ -1,0 +1,10 @@
+{
+  "name": "vidfast-stream-resolver",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "resolve": "node tools/resolve-stream.mjs",
+    "extract-decoder": "node tools/extract-decoder.mjs"
+  }
+}
