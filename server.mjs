@@ -8,7 +8,7 @@ import { parseStreamRequest } from './lib/content-path.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const indexPath = path.join(__dirname, 'public/index.html')
-const port = Number(process.env.PORT || 8787)
+const port = Number(process.env.PORT || 7860)
 
 function sendJson(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
@@ -16,7 +16,7 @@ function sendJson(res, status, body) {
 }
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://127.0.0.1:${port}`)
+  const url = new URL(req.url, `http://0.0.0.0:${port}`)
 
   if (url.pathname === '/api/hls') {
     const target = url.searchParams.get('url')
